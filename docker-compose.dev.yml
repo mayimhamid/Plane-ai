@@ -1,0 +1,18 @@
+# Development overrides. Never use in production.
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Run only the database (and the API locally with `python -m app`):
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d plane-ai-db
+
+services:
+  plane-ai-db:
+    # Internal networks can't publish ports, so join the edge network in dev only.
+    networks:
+      - plane-ai-internal
+      - plane-ai-edge
+    ports:
+      - "127.0.0.1:${PLANE_AI_DB_PORT:-5433}:5432"
+
+  plane-ai-api:
+    environment:
+      PLANE_AI_APP_ENV: development

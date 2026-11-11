@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     db_name: str = "plane_ai"
     db_user: str = "plane_ai"
     db_password: SecretStr = SecretStr("")
+    db_pool_size: int = Field(default=5, ge=1, le=100)
+    db_max_overflow: int = Field(default=5, ge=0, le=100)
+    db_connect_timeout_seconds: int = Field(default=5, ge=1, le=60)
+    db_echo: bool = False  # log every SQL statement (very noisy)
 
     # --- Model storage (outside Git) ---
     model_storage_path: Path = REPO_ROOT / "models"

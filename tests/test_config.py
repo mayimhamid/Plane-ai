@@ -1,21 +1,7 @@
-import sys
-from pathlib import Path
-
 import pytest
 from pydantic import ValidationError
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
-
-from app.core.config import REPO_ROOT, LLMRuntime, Settings  # noqa: E402
-
-
-@pytest.fixture(autouse=True)
-def _clean_env(monkeypatch):
-    import os
-
-    for key in list(os.environ):
-        if key.upper().startswith("PLANE_AI_"):
-            monkeypatch.delenv(key)
+from app.core.config import REPO_ROOT, LLMRuntime, Settings
 
 
 def make(**kw) -> Settings:

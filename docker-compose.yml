@@ -1,0 +1,67 @@
+# Plane AI stack (production baseline).
+# Fully separate from Plane's own stack: own project name, own database,
+# own volume and networks. Plane's database is never touched.
+#
+#   docker compose up -d --build                                          # production
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d  # development
+#
+# Variables are read from the repo-root .env (see .env.example).
+
+name: plane-ai
+
+services:
+  plane-ai-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PLANE_AI_DB_NAME:-plane_ai}
+      POSTGRES_USER: ${PLANE_AI_DB_USER:-plane_ai}
+      POSTGRES_PASSWORD: ${PLANE_AI_DB_PASSWORD:?PLANE_AI_DB_PASSWORD must be set in .env}
+    volumes:
+      - plane-ai-db-data:/var/lib/postgresql/data
+    networks:
+      - plane-ai-internal
+    # No `ports:` here: the database is reachable only on the internal network.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  plane-ai-api:
+    build:
+      context: ./backend
+    image: plane-ai-api:${PLANE_AI_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    init: true  # tiny init as PID 1: forwards signals, reaps zombies
+    stop_grace_period: 30s
+    depends_on:
+      plane-ai-db:
+        condition: service_healthy
+    environment:
+      PLANE_AI_APP_ENV: ${PLANE_AI_APP_ENV:-production}
+      PLANE_AI_LOG_LEVEL: ${PLANE_AI_LOG_LEVEL:-}
+      PLANE_AI_API_HOST: 0.0.0.0
+      PLANE_AI_API_PORT: "8100"
+      PLANE_AI_DB_HOST: plane-ai-db
+      PLANE_AI_DB_PORT: "5432"
+      PLANE_AI_DB_NAME: ${PLANE_AI_DB_NAME:-plane_ai}
+      PLANE_AI_DB_USER: ${PLANE_AI_DB_USER:-plane_ai}
+      PLANE_AI_DB_PASSWORD: ${PLANE_AI_DB_PASSWORD:?PLANE_AI_DB_PASSWORD must be set in .env}
+      PLANE_AI_RUN_MIGRATIONS: ${PLANE_AI_RUN_MIGRATIONS:-true}
+    ports:
+      # Bound to localhost by default; set PLANE_AI_API_BIND=0.0.0.0 to expose on the LAN.
+      - "${PLANE_AI_API_BIND:-127.0.0.1}:${PLANE_AI_API_PORT:-8100}:8100"
+    networks:
+      - plane-ai-internal
+      - plane-ai-edge
+
+networks:
+  # internal: true = no route to the outside world and no published ports.
+  plane-ai-internal:
+    internal: true
+  plane-ai-edge: {}
+
+volumes:
+  plane-ai-db-data:

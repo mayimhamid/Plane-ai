@@ -35,9 +35,47 @@ In production, startup fails if `DEBUG` is on or no database password is set.
 Model weights are **never** committed. They live in `PLANE_AI_MODEL_STORAGE_PATH` (default `./models`,
 git-ignored). `*.gguf`, `*.safetensors`, and similar files are git-ignored everywhere.
 
+## Running with Docker
+
+Plane AI runs as its own Compose project (`plane-ai`), next to Plane, with its own PostgreSQL.
+Plane's database is never touched.
+
+```bash
+cp .env.example .env   # then set PLANE_AI_DB_PASSWORD
+docker compose up -d --build
+curl http://127.0.0.1:8100/health
+curl http://127.0.0.1:8100/ready
+```
+
+- `plane-ai-db` (official `postgres:16-alpine`): data in the `plane-ai-db-data` volume, healthchecked,
+  only on the internal network `plane-ai-internal`, with no published port.
+- `plane-ai-api`: runs as a non-root user, runs `alembic upgrade head` on start (`PLANE_AI_RUN_MIGRATIONS`),
+  and is published on `127.0.0.1:8100` by default.
+
+Development override: publishes the DB on `127.0.0.1:5433` and sets `APP_ENV=development`.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+```
+
+## API
+
+| Endpoint | Meaning |
+|----------|---------|
+| `GET /health` | Liveness: the process is up. Doesn't check dependencies. |
+| `GET /ready` | Readiness: the database is reachable. Returns `503` if it isn't. |
+| `GET /docs` | OpenAPI UI (disabled in production) |
+
 ## Development
 
 ```bash
 pip install -e "backend[dev]"
 pytest tests
+
+# API locally (with the DB from the dev compose override)
+cd backend && python -m app
+
+# Migrations
+cd backend && alembic revision --autogenerate -m "describe change"
+cd backend && alembic upgrade head
 ```
