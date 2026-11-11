@@ -151,12 +151,28 @@ Validate the config without starting anything:
 docker compose config --services
 ```
 
+### Verifying the infrastructure
+
+Static checks (git, compose), no downloads:
+
+```bash
+bash tests/infra/verify_stack.sh --static
+```
+
+Full end-to-end check on the server (build, model download once, both runtimes, health):
+
+```bash
+bash tests/infra/verify_stack.sh
+```
+
+See [docs/infrastructure-verification.md](docs/infrastructure-verification.md).
+
 ## API
 
 | Endpoint | Meaning |
 |----------|---------|
 | `GET /health` | Liveness: the process is up. Doesn't check dependencies. |
-| `GET /ready` | Readiness: the database is reachable. Returns `503` if it isn't. |
+| `GET /ready` | Readiness: the database is reachable and the selected runtime serves the model (`ok`, `unavailable`, `loading`, `model_missing`). Returns `503` if not. |
 | `GET /docs` | OpenAPI UI (disabled in production) |
 
 ## Development

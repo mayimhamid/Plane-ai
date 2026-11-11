@@ -75,3 +75,14 @@ def test_llm_host_used_for_base_url():
 def test_model_file_must_be_bare_name():
     with pytest.raises(ValidationError):
         make(llm_model_file="../outside.gguf")
+
+
+def test_empty_env_vars_fall_back_to_defaults(monkeypatch):
+    # docker compose passes unset optional vars as empty strings
+    monkeypatch.setenv("PLANE_AI_LOG_LEVEL", "")
+    monkeypatch.setenv("PLANE_AI_LLM_BASE_URL", "")
+    monkeypatch.setenv("PLANE_AI_DEBUG", "")
+    s = make()
+    assert s.log_level == "DEBUG"
+    assert s.llm_base_url == "http://localhost:11434"
+    assert s.debug is True

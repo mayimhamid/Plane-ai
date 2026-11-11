@@ -111,7 +111,6 @@ services:
       PLANE_AI_LLM_MODEL_NAME: ${PLANE_AI_LLM_MODEL_NAME:-qwen3.5-2b}
       PLANE_AI_LLM_MODEL_FILE: ${PLANE_AI_LLM_MODEL_FILE:-Qwen3.5-2B-Q4_K_M.gguf}
       PLANE_AI_LLM_CONTEXT_LENGTH: ${PLANE_AI_LLM_CONTEXT_LENGTH:-8192}
-      PLANE_AI_MODEL_STORAGE_PATH: /models
     ports:
       # Bound to localhost by default; set PLANE_AI_API_BIND=0.0.0.0 to expose on the LAN.
       - "${PLANE_AI_API_BIND:-127.0.0.1}:${PLANE_AI_API_PORT:-8100}:8100"

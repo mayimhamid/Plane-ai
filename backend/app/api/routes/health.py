@@ -2,7 +2,8 @@
 
 - ``/health``: the process is up and serving requests. Never touches dependencies,
   so a slow database can't get a healthy container restarted.
-- ``/ready``: dependencies are reachable; returns 503 otherwise.
+- ``/ready``: the database is reachable and the selected LLM runtime serves the
+  configured model; returns 503 otherwise.
 """
 
 from __future__ import annotations
@@ -32,20 +33,43 @@ async def health(request: Request) -> dict[str, str]:
     }
 
 
-@router.get("/ready")
-async def ready(request: Request, response: Response) -> dict[str, object]:
-    checks: dict[str, str] = {}
-
+async def _check_database(request: Request) -> str:
     try:
         await asyncio.wait_for(
             run_in_threadpool(request.app.state.db.ping), timeout=READY_CHECK_TIMEOUT_SECONDS
         )
-        checks["database"] = "ok"
+        return "ok"
     except Exception as exc:  # any failure means "not ready"
         logger.warning("readiness check failed: database: %s", exc.__class__.__name__)
-        checks["database"] = "unavailable"
+        return "unavailable"
+
+
+async def _check_llm(request: Request) -> str:
+    try:
+        result = await asyncio.wait_for(
+            request.app.state.llm.check(), timeout=READY_CHECK_TIMEOUT_SECONDS + 1
+        )
+    except Exception as exc:
+        logger.warning("readiness check failed: llm runtime: %s", exc.__class__.__name__)
+        return "unavailable"
+    if result.value != "ok":
+        logger.warning("readiness check failed: llm runtime: %s", result.value)
+    return result.value
+
+
+@router.get("/ready")
+async def ready(request: Request, response: Response) -> dict[str, object]:
+    database, llm = await asyncio.gather(_check_database(request), _check_llm(request))
+    checks = {"database": database, "llm_runtime": llm}
 
     is_ready = all(v == "ok" for v in checks.values())
     if not is_ready:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    return {"status": "ready" if is_ready else "not_ready", "checks": checks}
+    return {
+        "status": "ready" if is_ready else "not_ready",
+        "checks": checks,
+        "llm": {
+            "runtime": request.app.state.settings.llm_runtime.value,
+            "model": request.app.state.settings.llm_model_name,
+        },
+    }

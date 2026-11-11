@@ -18,6 +18,7 @@ from app.api.routes import health
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.session import Database, DatabaseProtocol
+from app.llm.runtime import RuntimeClient, create_runtime_client
 
 logger = logging.getLogger("app")
 
@@ -25,6 +26,7 @@ logger = logging.getLogger("app")
 def create_app(
     settings: Settings | None = None,
     database_factory: Callable[[Settings], DatabaseProtocol] = Database,
+    runtime_client_factory: Callable[[Settings], RuntimeClient] = create_runtime_client,
 ) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings)
@@ -45,10 +47,21 @@ def create_app(
         except Exception as exc:
             # Don't crash: /ready reports it, and the DB may come up later.
             logger.warning("database not reachable at startup: %s", exc.__class__.__name__)
+
+        app.state.llm = runtime_client_factory(settings)
+        llm_status = await app.state.llm.check()
+        logger.info(
+            "llm runtime %s at %s: %s (model %s)",
+            settings.llm_runtime.value,
+            settings.llm_base_url,
+            llm_status.value,
+            settings.llm_model_name,
+        )
         try:
             yield
         finally:
             logger.info("shutting down")
+            await app.state.llm.aclose()
             app.state.db.dispose()
             logger.info("shutdown complete")
 

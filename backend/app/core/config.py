@@ -56,6 +56,9 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        # Compose passes unset optional vars as "" (e.g. `${PLANE_AI_LOG_LEVEL:-}`):
+        # treat empty as "not set" so the defaults apply.
+        env_ignore_empty=True,
     )
 
     # --- Application ---
