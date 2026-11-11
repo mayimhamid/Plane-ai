@@ -39,9 +39,9 @@ class LLMRuntime(str, Enum):
     LLAMA_CPP = "llama-cpp"
 
 
-DEFAULT_RUNTIME_URLS: dict[LLMRuntime, str] = {
-    LLMRuntime.OLLAMA: "http://localhost:11434",
-    LLMRuntime.LLAMA_CPP: "http://localhost:8080",
+DEFAULT_RUNTIME_PORTS: dict[LLMRuntime, int] = {
+    LLMRuntime.OLLAMA: 11434,
+    LLMRuntime.LLAMA_CPP: 8080,
 }
 
 
@@ -86,9 +86,10 @@ class Settings(BaseSettings):
 
     # --- LLM runtime ---
     llm_runtime: LLMRuntime = LLMRuntime.OLLAMA
-    llm_base_url: str | None = None  # derived from llm_runtime when unset
-    llm_model_name: str = "qwen2.5:7b-instruct"
-    llm_model_file: str | None = None  # GGUF filename for llama-cpp, relative to model_storage_path
+    llm_host: str = "localhost"  # "plane-ai-llm" inside Docker (alias shared by both runtimes)
+    llm_base_url: str | None = None  # derived from llm_host + runtime's default port when unset
+    llm_model_name: str = "qwen3.5-2b"  # Ollama model name / llama.cpp alias
+    llm_model_file: str = "Qwen3.5-2B-Q4_K_M.gguf"  # shared GGUF, inside model_storage_path
     llm_context_length: int = Field(default=8192, ge=512, le=131072)
     llm_request_timeout_seconds: float = Field(default=120.0, gt=0)
 
@@ -118,7 +119,7 @@ class Settings(BaseSettings):
         if self.log_level is None:
             self.log_level = "INFO" if is_prod else "DEBUG"
         if self.llm_base_url is None:
-            self.llm_base_url = DEFAULT_RUNTIME_URLS[self.llm_runtime]
+            self.llm_base_url = f"http://{self.llm_host}:{DEFAULT_RUNTIME_PORTS[self.llm_runtime]}"
         self.llm_base_url = self.llm_base_url.rstrip("/")
 
         if is_prod:
@@ -133,8 +134,6 @@ class Settings(BaseSettings):
             errors.append(
                 f"{ENV_PREFIX}DB_PASSWORD (or {ENV_PREFIX}DATABASE_URL) is required in production"
             )
-        if self.llm_runtime is LLMRuntime.LLAMA_CPP and not self.llm_model_file:
-            errors.append(f"{ENV_PREFIX}LLM_MODEL_FILE is required when using llama-cpp in production")
         if errors:
             raise ValueError("; ".join(errors))
 
@@ -155,11 +154,16 @@ class Settings(BaseSettings):
         auth = f"{quote(self.db_user, safe='')}:{password}" if password else quote(self.db_user, safe="")
         return f"postgresql+psycopg://{auth}@{self.db_host}:{self.db_port}/{self.db_name}"
 
+    @field_validator("llm_model_file")
+    @classmethod
+    def _bare_filename(cls, v: str) -> str:
+        if not v or "/" in v or "\\" in v or v in {".", ".."}:
+            raise ValueError("must be a bare file name inside the model storage path")
+        return v
+
     @property
-    def llm_model_path(self) -> Path | None:
-        """Absolute path to the GGUF file for llama-cpp, if configured."""
-        if not self.llm_model_file:
-            return None
+    def llm_model_path(self) -> Path:
+        """Absolute path to the shared GGUF file."""
         return self.model_storage_path / self.llm_model_file
 
     def safe_summary(self) -> dict[str, object]:

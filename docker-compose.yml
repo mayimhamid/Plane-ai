@@ -1,15 +1,24 @@
 # Plane AI stack (production baseline).
-# Fully separate from Plane's own stack: own project name, own database,
-# own volume and networks. Plane's database is never touched.
+# Fully separate from Plane's own stack: own project name, database, volumes and
+# networks. Plane's database is never touched.
 #
-#   docker compose up -d --build                                          # production
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d  # development
+# Exactly one LLM runtime runs at a time, chosen by the compose profile
+# (in .env: PLANE_AI_LLM_RUNTIME=ollama|llama-cpp and COMPOSE_PROFILES=${PLANE_AI_LLM_RUNTIME}).
 #
-# Variables are read from the repo-root .env (see .env.example).
+# Startup order:
+#   plane-ai-db (healthy) ─────────────────────────────────┐
+#   plane-ai-model-init (exits 0) -> runtime (healthy) ────┴─> plane-ai-api
+#
+# Commands: see README.md ("Running with Docker").
 
 name: plane-ai
 
+# Model storage (shared by model-init and both runtimes): PLANE_AI_MODEL_VOLUME.
+# Default is the named volume `plane-ai-models`; a host path such as
+# /srv/plane-ai/models gives a bind mount outside the repository instead.
+
 services:
+  # ------------------------------------------------------------------ database
   plane-ai-db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -21,7 +30,7 @@ services:
       - plane-ai-db-data:/var/lib/postgresql/data
     networks:
       - plane-ai-internal
-    # No `ports:` here: the database is reachable only on the internal network.
+    # No `ports:`: reachable only on the internal network.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 10s
@@ -29,6 +38,46 @@ services:
       retries: 5
       start_period: 20s
 
+  # ------------------------------------------------------------------ model
+  plane-ai-model-init:
+    build:
+      context: ./orchestration/model-init
+    image: plane-ai-model-init:${PLANE_AI_IMAGE_TAG:-latest}
+    profiles: [ollama, llama-cpp]  # only when a runtime is selected
+    restart: "no"  # one-shot job
+    environment:
+      PLANE_AI_MODEL_STORAGE_PATH: /models
+      PLANE_AI_LLM_MODEL_FILE: ${PLANE_AI_LLM_MODEL_FILE:-Qwen3.5-2B-Q4_K_M.gguf}
+      PLANE_AI_MODEL_URL: ${PLANE_AI_MODEL_URL:-}
+      PLANE_AI_MODEL_SHA256: ${PLANE_AI_MODEL_SHA256:-}
+      PLANE_AI_MODEL_ALLOW_UNVERIFIED: ${PLANE_AI_MODEL_ALLOW_UNVERIFIED:-false}
+      PLANE_AI_MODEL_DOWNLOAD_RETRIES: ${PLANE_AI_MODEL_DOWNLOAD_RETRIES:-5}
+      PLANE_AI_HF_TOKEN: ${PLANE_AI_HF_TOKEN:-}
+    volumes:
+      - ${PLANE_AI_MODEL_VOLUME:-plane-ai-models}:/models  # read-write only here
+    networks:
+      - plane-ai-edge  # needs internet access for the download
+
+  # ------------------------------------------------------------------ LLM runtimes (pick one)
+  plane-ai-ollama:
+    extends:
+      file: runtimes/ollama/compose.yaml
+      service: plane-ai-ollama
+    profiles: [ollama]
+    depends_on:
+      plane-ai-model-init:
+        condition: service_completed_successfully
+
+  plane-ai-llama-cpp:
+    extends:
+      file: runtimes/llama-cpp/compose.yaml
+      service: plane-ai-llama-cpp
+    profiles: [llama-cpp]
+    depends_on:
+      plane-ai-model-init:
+        condition: service_completed_successfully
+
+  # ------------------------------------------------------------------ API
   plane-ai-api:
     build:
       context: ./backend
@@ -39,6 +88,13 @@ services:
     depends_on:
       plane-ai-db:
         condition: service_healthy
+      # Only the runtime in the active profile applies; the other is ignored.
+      plane-ai-ollama:
+        condition: service_healthy
+        required: false
+      plane-ai-llama-cpp:
+        condition: service_healthy
+        required: false
     environment:
       PLANE_AI_APP_ENV: ${PLANE_AI_APP_ENV:-production}
       PLANE_AI_LOG_LEVEL: ${PLANE_AI_LOG_LEVEL:-}
@@ -50,6 +106,12 @@ services:
       PLANE_AI_DB_USER: ${PLANE_AI_DB_USER:-plane_ai}
       PLANE_AI_DB_PASSWORD: ${PLANE_AI_DB_PASSWORD:?PLANE_AI_DB_PASSWORD must be set in .env}
       PLANE_AI_RUN_MIGRATIONS: ${PLANE_AI_RUN_MIGRATIONS:-true}
+      PLANE_AI_LLM_RUNTIME: ${PLANE_AI_LLM_RUNTIME:-ollama}
+      PLANE_AI_LLM_HOST: plane-ai-llm  # network alias shared by both runtimes
+      PLANE_AI_LLM_MODEL_NAME: ${PLANE_AI_LLM_MODEL_NAME:-qwen3.5-2b}
+      PLANE_AI_LLM_MODEL_FILE: ${PLANE_AI_LLM_MODEL_FILE:-Qwen3.5-2B-Q4_K_M.gguf}
+      PLANE_AI_LLM_CONTEXT_LENGTH: ${PLANE_AI_LLM_CONTEXT_LENGTH:-8192}
+      PLANE_AI_MODEL_STORAGE_PATH: /models
     ports:
       # Bound to localhost by default; set PLANE_AI_API_BIND=0.0.0.0 to expose on the LAN.
       - "${PLANE_AI_API_BIND:-127.0.0.1}:${PLANE_AI_API_PORT:-8100}:8100"
@@ -65,3 +127,5 @@ networks:
 
 volumes:
   plane-ai-db-data:
+  plane-ai-models:
+  plane-ai-ollama-data:

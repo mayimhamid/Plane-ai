@@ -30,32 +30,125 @@ Resolution order (highest priority first): process environment, `.env.<APP_ENV>`
 built-in defaults. `PLANE_AI_APP_ENV` selects `development` (default), `production`, or `test`.
 In production, startup fails if `DEBUG` is on or no database password is set.
 
-## Model weights
+## Model
 
-Model weights are **never** committed. They live in `PLANE_AI_MODEL_STORAGE_PATH` (default `./models`,
-git-ignored). `*.gguf`, `*.safetensors`, and similar files are git-ignored everywhere.
+Target model: **`Qwen3.5-2B-Q4_K_M.gguf`** (about 1.2 GiB) from `unsloth/Qwen3.5-2B-GGUF`. The download
+URL is pinned to a specific commit and checked against a known SHA256.
+
+- Weights are **never** committed. `*.gguf`, `models/`, and similar paths are git-ignored.
+- In Docker the model lives in the `plane-ai-models` volume, or in a host path outside the repo
+  set by `PLANE_AI_MODEL_VOLUME`.
+- `plane-ai-model-init` is a one-shot job. It downloads the file only if it's missing,
+  resumes interrupted downloads, verifies the SHA256, and atomically moves the file into place.
+  If the file is already verified, it exits right away, so restarts don't re-download.
+- **Both runtimes use the same file.** llama.cpp reads it directly from the volume
+  (read-only). Ollama can't serve a GGUF in place, so on first start it imports the same file
+  into its own store (one extra copy of about 1.2 GiB in `plane-ai-ollama-data`). It re-imports
+  only when the file or the context length changes.
 
 ## Running with Docker
 
-Plane AI runs as its own Compose project (`plane-ai`), next to Plane, with its own PostgreSQL.
+Plane AI runs as its own Compose project (`plane-ai`) next to Plane, with its own PostgreSQL.
 Plane's database is never touched.
 
+```
+plane-ai-db (healthy) ──────────────────────────────────────┐
+plane-ai-model-init (exits 0) ─> ollama | llama-cpp (healthy) ┴─> plane-ai-api
+```
+
+| Service | Image | Network | Published |
+|---------|-------|---------|-----------|
+| `plane-ai-db` | `postgres:16-alpine` | internal | no |
+| `plane-ai-model-init` | built from `orchestration/model-init` | edge (needs internet) | no |
+| `plane-ai-ollama` (profile `ollama`) | `ollama/ollama` | internal, alias `plane-ai-llm:11434` | no |
+| `plane-ai-llama-cpp` (profile `llama-cpp`) | `ghcr.io/ggml-org/llama.cpp:server` | internal, alias `plane-ai-llm:8080` | no |
+| `plane-ai-api` | built from `backend/` | internal + edge | `127.0.0.1:8100` |
+
+`plane-ai-internal` is a Docker `internal` network, with no internet access and no published ports.
+Runtime CPU and memory are capped by `PLANE_AI_LLM_CPUS` / `PLANE_AI_LLM_MEMORY`.
+
+### Selecting the runtime
+
+Exactly one runtime runs at a time. It's selected by a single variable in `.env`:
+
+```dotenv
+PLANE_AI_LLM_RUNTIME=ollama          # or: llama-cpp
+COMPOSE_PROFILES=${PLANE_AI_LLM_RUNTIME}
+```
+
+Never put both profiles in `COMPOSE_PROFILES`.
+
+### Production
+
 ```bash
-cp .env.example .env   # then set PLANE_AI_DB_PASSWORD
+cp .env.example .env
+```
+
+Edit `.env`: set `PLANE_AI_DB_PASSWORD`, choose `PLANE_AI_LLM_RUNTIME`, and pin the runtime images. Then:
+
+```bash
 docker compose up -d --build
-curl http://127.0.0.1:8100/health
+```
+
+```bash
+docker compose logs -f plane-ai-model-init
+```
+
+```bash
+docker compose ps
+```
+
+```bash
 curl http://127.0.0.1:8100/ready
 ```
 
-- `plane-ai-db` (official `postgres:16-alpine`): data in the `plane-ai-db-data` volume, healthchecked,
-  only on the internal network `plane-ai-internal`, with no published port.
-- `plane-ai-api`: runs as a non-root user, runs `alembic upgrade head` on start (`PLANE_AI_RUN_MIGRATIONS`),
-  and is published on `127.0.0.1:8100` by default.
+The first start downloads the model (about 1.2 GiB). Later starts reuse it.
 
-Development override: publishes the DB on `127.0.0.1:5433` and sets `APP_ENV=development`.
+### Switching runtime
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+docker compose down
+```
+
+Then change `PLANE_AI_LLM_RUNTIME` in `.env` and start again:
+
+```bash
+docker compose up -d
+```
+
+### Development
+
+Publishes the DB on `127.0.0.1:5433`, the runtime on `127.0.0.1:11434` or `:8080`, and sets
+`APP_ENV=development`:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+```
+
+Only the database, with the API run locally via `cd backend && python -m app`:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d plane-ai-db
+```
+
+### Useful commands
+
+Re-run the model check by hand:
+
+```bash
+docker compose run --rm plane-ai-model-init
+```
+
+Stop the stack (volumes and the model are kept):
+
+```bash
+docker compose down
+```
+
+Validate the config without starting anything:
+
+```bash
+docker compose config --services
 ```
 
 ## API

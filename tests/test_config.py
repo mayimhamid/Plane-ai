@@ -64,3 +64,14 @@ def test_safe_summary_hides_secrets():
 def test_invalid_context_length():
     with pytest.raises(ValidationError):
         make(llm_context_length=100)
+
+
+def test_llm_host_used_for_base_url():
+    s = make(llm_host="plane-ai-llm", llm_runtime="llama-cpp")
+    assert s.llm_base_url == "http://plane-ai-llm:8080"
+    assert s.llm_model_path == s.model_storage_path / "Qwen3.5-2B-Q4_K_M.gguf"
+
+
+def test_model_file_must_be_bare_name():
+    with pytest.raises(ValidationError):
+        make(llm_model_file="../outside.gguf")
