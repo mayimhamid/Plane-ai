@@ -88,3 +88,59 @@ class DocumentChunk(Base):
     text: Mapped[str] = mapped_column(Text)
     embedding: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class Job(Base):
+    """Slow AI work done in the background (summaries, task proposals, reviews, answers).
+
+    Plane starts a job and polls it, so no web request waits minutes on a busy CPU. Jobs survive a restart: the
+    ones not finished are run again at start-up.
+    """
+
+    __tablename__ = "ai_job"
+    __table_args__ = (Index("ix_ai_job_ws_kind_key", "workspace_id", "kind", "key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)
+    user_id: Mapped[str] = mapped_column(String(64))
+    # user: only the person who asked may read it; managers: any manager of the workspace may.
+    audience: Mapped[str] = mapped_column(String(16), default="user")
+    kind: Mapped[str] = mapped_column(String(32))
+    # Lets Plane find the latest result for the same question (e.g. the daily review of one day and team).
+    key: Mapped[str] = mapped_column(String(200), default="")
+    status: Mapped[str] = mapped_column(String(16), default="queued")  # queued | running | done | failed
+    progress: Mapped[str] = mapped_column(String(200), default="")
+    input: Mapped[dict] = mapped_column(JSON)
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str] = mapped_column(String(300), default="")
+    effort: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Trace(Base):
+    """One model call made by a job: the prompt and the answer. Rated traces become training data."""
+
+    __tablename__ = "ai_trace"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("ai_job.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    messages: Mapped[list] = mapped_column(JSON)
+    output: Mapped[str] = mapped_column(Text)
+
+
+class Feedback(Base):
+    """An admin's rating of a job's answer, with an optional corrected answer (the better target to learn)."""
+
+    __tablename__ = "ai_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("ai_job.id", ondelete="CASCADE"), index=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)
+    user_id: Mapped[str] = mapped_column(String(64))
+    # Which part was rated (e.g. a person id in a daily review); empty = the whole answer.
+    item: Mapped[str] = mapped_column(String(100), default="")
+    rating: Mapped[int] = mapped_column(Integer)  # 1 good, -1 wrong
+    correction: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

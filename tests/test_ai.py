@@ -13,7 +13,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import Settings
 from app.db.models import Base
 from app.llm.effort import Effort, profile_for
-from app.llm.generate import Generation, GenerationError, Usage
+from app.llm.generate import Generation, GenerationError, Usage, current_trace
 from app.llm.runtime import RuntimeStatus
 from app.main import create_app
 
@@ -62,7 +62,11 @@ class FakeGenerator:
 
     async def complete(self, messages, profile, json_schema=None) -> Generation:
         self.calls.append({"messages": messages, "profile": profile, "schema": json_schema})
-        return Generation(self._next(messages), Usage(10, 5))
+        text = self._next(messages)
+        trace = current_trace.get()
+        if trace is not None:  # like the real generator: jobs record every call
+            trace.append({"messages": messages, "output": text})
+        return Generation(text, Usage(10, 5))
 
     async def stream(self, messages, profile, usage):
         self.calls.append({"messages": messages, "profile": profile, "stream": True})

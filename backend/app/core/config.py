@@ -97,6 +97,8 @@ class Settings(BaseSettings):
     llm_request_timeout_seconds: float = Field(default=120.0, gt=0)
     # CPU threads the runtime may use at the highest effort (Ollama takes it per request).
     llm_max_threads: int = Field(default=4, ge=1, le=256)
+    # Ollama: how long the model stays in memory after a request (no reload on the next question).
+    llm_keep_alive: str = "24h"
     # Generations run one at a time by default: on a small machine two in parallel are both slower.
     llm_max_concurrency: int = Field(default=1, ge=1, le=16)
 

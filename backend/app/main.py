@@ -14,12 +14,13 @@ from fastapi import FastAPI
 from starlette.concurrency import run_in_threadpool
 
 from app import __version__
-from app.api.routes import ai, health
+from app.api.routes import ai, health, jobs
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.session import Database, DatabaseProtocol
 from app.llm.generate import Generator, create_generator
 from app.llm.runtime import RuntimeClient, create_runtime_client
+from app.jobs.runner import JobRunner
 from app.services.cache import TTLCache
 
 logger = logging.getLogger("app")
@@ -53,6 +54,13 @@ def create_app(
 
         app.state.llm = runtime_client_factory(settings)
         app.state.generator = generator_factory(settings)
+        app.state.jobs = JobRunner(settings, getattr(app.state.db, "session_factory", None), app.state.generator)
+        try:
+            resumed = app.state.jobs.resume()
+            if resumed:
+                logger.info("resumed %d unfinished jobs", resumed)
+        except Exception as exc:  # the database may come up later; new jobs still work then
+            logger.warning("could not resume jobs: %s", exc.__class__.__name__)
         llm_status = await app.state.llm.check()
         logger.info(
             "llm runtime %s at %s: %s (model %s)",
@@ -65,6 +73,7 @@ def create_app(
             yield
         finally:
             logger.info("shutting down")
+            await app.state.jobs.drain()
             await app.state.llm.aclose()
             await app.state.generator.aclose()
             app.state.db.dispose()
@@ -83,4 +92,5 @@ def create_app(
     app.state.cache = TTLCache(settings.cache_ttl_seconds)
     app.include_router(health.router)
     app.include_router(ai.router)
+    app.include_router(jobs.router)
     return app

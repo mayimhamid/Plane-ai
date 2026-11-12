@@ -1,0 +1,10 @@
+# Optional: a LoRA adapter (GGUF) for llama.cpp, trained from Plane AI's exported training data
+# (docs/fine-tuning.md). Put it in the model volume, set PLANE_AI_LORA_ADAPTER in .env, and add this file:
+#
+#   docker compose -f docker-compose.yml -f runtimes/llama-cpp/lora.yaml up -d
+#
+# With Ollama no extra file is needed: PLANE_AI_LORA_ADAPTER alone makes it import the adapter.
+
+services:
+  plane-ai-llama-cpp:
+    command: ["--lora", "/models/${PLANE_AI_LORA_ADAPTER:?set PLANE_AI_LORA_ADAPTER in .env}"]

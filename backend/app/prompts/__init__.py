@@ -171,6 +171,63 @@ MEMORY = _register(
 )
 
 
+DAILY_REVIEW = _register(
+    PromptTemplate(
+        name="daily_review",
+        version=1,
+        description="Daily review: is the time each person reported proportionate to the work they describe?",
+        system="You review one team member's Day Report for a manager, like an experienced senior engineer would. "
+        "For every row you get the task, its description, the minutes reported, the person's note and what Plane "
+        "recorded (activity on the task, a document, whether a task marked done is really closed).\n"
+        "For each row decide:\n"
+        "- plausible: the time fits the work described and recorded.\n"
+        "- inflated: the time is much more than the described work normally needs (for example a whole day for "
+        "a routine config change, or hours of 'research' with no result named).\n"
+        "- vague: the note does not say what was done or produced, so the time cannot be judged.\n"
+        "- unrelated: the note describes work that does not belong to this task.\n"
+        "Estimate how many minutes an experienced person would normally need (expected_minutes). Be fair: "
+        "outages, debugging, learning something new, meetings and reviews can honestly take long; say what "
+        "would make the time believable. Never insult. Reasons are one short sentence. Answer in English.",
+        user="Person: $name\nDay: $day\nTotal reported: $total_minutes min\n\nROWS:\n$rows",
+    )
+)
+
+ROUTER = _register(
+    PromptTemplate(
+        name="router",
+        version=1,
+        description="Expert router (system-level mixture of experts): which data sections answer the question.",
+        system="Pick the data sections needed to answer a manager's question about their team. Sections: "
+        "$sections. Choose at most 3, most useful first.",
+        user="$question",
+    )
+)
+
+ASK = _register(
+    PromptTemplate(
+        name="ask",
+        version=1,
+        description="Ask and Answer for admins: answers questions about the team from the data given.",
+        system="You answer a manager's question about their team using ONLY the data below (from Plane: Day "
+        "Reports, time, tasks, evidence of work, risks). Copy numbers exactly as they appear; never compute "
+        "new totals unless the question asks and the data allows it. If the data does not answer the question, "
+        "say what is missing. Name people when relevant. Short answer first, then the supporting facts as "
+        "bullets. Answer in the language of the question.\n\n$expert\n\nDATA ($period):\n$data",
+        user="$question",
+    )
+)
+
+ASK_FIX = _register(
+    PromptTemplate(
+        name="ask_fix",
+        version=1,
+        description="Verifier: rewrites an answer whose numbers are not in the data.",
+        system="The answer below uses numbers that are not in the data: $bad. Rewrite the answer so every number "
+        "comes from the data, or remove the claim. Output only the corrected answer.\n\nDATA:\n$data",
+        user="QUESTION: $question\n\nANSWER:\n$answer",
+    )
+)
+
 def catalog() -> list[dict[str, object]]:
     return [
         {"name": p.name, "version": p.version, "description": p.description} for p in sorted(PROMPTS.values(), key=lambda p: p.name)

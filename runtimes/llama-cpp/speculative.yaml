@@ -1,0 +1,12 @@
+# Optional: speculative decoding for llama.cpp. A much smaller model of the same family (same tokenizer, e.g. a
+# 0.5-0.8B Qwen GGUF) drafts tokens and the main model only checks them: identical answers, faster generation when
+# the draft guesses well, a few hundred MB more memory. Put the draft GGUF in the model volume, set
+# PLANE_AI_DRAFT_MODEL_FILE in .env, and add this file to the command:
+#
+#   docker compose -f docker-compose.yml -f runtimes/llama-cpp/speculative.yaml up -d
+
+services:
+  plane-ai-llama-cpp:
+    environment:
+      LLAMA_ARG_MODEL_DRAFT: /models/${PLANE_AI_DRAFT_MODEL_FILE:?set PLANE_AI_DRAFT_MODEL_FILE in .env}
+      LLAMA_ARG_DRAFT_MAX: ${PLANE_AI_DRAFT_MAX:-8}

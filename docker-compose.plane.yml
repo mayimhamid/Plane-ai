@@ -1,0 +1,22 @@
+# Connects Plane AI to Plane on the same server, over a private Docker network (no published port needed).
+#
+# Once on the server:
+#   docker network create plane-ai-link
+#
+# Start Plane AI with this file added:
+#   docker compose -f docker-compose.yml -f docker-compose.plane.yml up -d --build
+#
+# In Plane's docker-compose.yaml, the `api` service also joins `plane-ai-link` (see docs/deploy-with-plane.md),
+# and Plane's plane.env has PLANE_AI_URL=http://plane-ai-api:8100 and PLANE_AI_TOKEN=<PLANE_AI_SERVICE_TOKEN>.
+
+services:
+  plane-ai-api:
+    networks:
+      plane-ai-internal: {}
+      plane-ai-edge: {}
+      plane-ai-link:
+        aliases: [plane-ai-api]
+
+networks:
+  plane-ai-link:
+    external: true

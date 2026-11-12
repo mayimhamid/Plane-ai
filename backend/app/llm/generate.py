@@ -11,8 +11,10 @@ Generations go through one semaphore, so a small machine never runs two at once 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -23,6 +25,55 @@ from app.core.config import LLMRuntime, Settings
 from app.llm.effort import EffortProfile
 
 logger = logging.getLogger(__name__)
+
+
+# Qwen-style models may still emit a reasoning block; it is never shown to people or parsed as JSON.
+_THINK = re.compile(r"<think>.*?(</think>|$)", re.DOTALL)
+
+# When a job runs, every completed generation is recorded here (prompt + answer) so admins can later rate it and
+# export it as training data (distillation / LoRA). `None` = not recording.
+current_trace: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar("current_trace", default=None)
+
+
+def strip_think(text: str) -> str:
+    return _THINK.sub("", text).strip()
+
+
+class ThinkFilter:
+    """Drops `<think>...</think>` from a token stream, even when the tags are split across pieces."""
+
+    def __init__(self) -> None:
+        self.buffer = ""
+        self.inside = False
+
+    def feed(self, piece: str) -> str:
+        self.buffer += piece
+        out = []
+        while self.buffer:
+            if self.inside:
+                end = self.buffer.find("</think>")
+                if end == -1:
+                    self.buffer = self.buffer[-7:]  # keep a possible partial closing tag
+                    return "".join(out)
+                self.buffer = self.buffer[end + 8 :]
+                self.inside = False
+                continue
+            start = self.buffer.find("<think>")
+            if start == -1:
+                # hold back a possible partial opening tag at the end
+                keep = next((k for k in range(min(6, len(self.buffer)), 0, -1) if "<think>".startswith(self.buffer[-k:])), 0)
+                out.append(self.buffer[: len(self.buffer) - keep])
+                self.buffer = self.buffer[len(self.buffer) - keep :]
+                return "".join(out)
+            out.append(self.buffer[:start])
+            self.buffer = self.buffer[start + 7 :]
+            self.inside = True
+        return "".join(out)
+
+    def flush(self) -> str:
+        rest = "" if self.inside else self.buffer
+        self.buffer = ""
+        return rest
 
 
 class GenerationError(RuntimeError):
@@ -56,6 +107,7 @@ class Generator(Protocol):
 class _HttpGenerator:
     def __init__(self, settings: Settings, transport: httpx.AsyncBaseTransport | None = None) -> None:
         self.model = settings.llm_model_name
+        self.keep_alive = settings.llm_keep_alive
         self.embed_model = settings.embed_model
         self._lock = asyncio.Semaphore(settings.llm_max_concurrency)
         self._http = httpx.AsyncClient(
@@ -72,7 +124,12 @@ class _HttpGenerator:
     ) -> Generation:
         async with self._lock:
             try:
-                return await self._complete(messages, profile, json_schema)
+                result = await self._complete(messages, profile, json_schema)
+                result.text = strip_think(result.text)
+                trace = current_trace.get()
+                if trace is not None:
+                    trace.append({"messages": messages, "output": result.text})
+                return result
             except httpx.HTTPError as exc:
                 raise GenerationError(f"runtime request failed: {exc.__class__.__name__}") from exc
             except (ValueError, KeyError, TypeError) as exc:
@@ -80,9 +137,15 @@ class _HttpGenerator:
 
     async def stream(self, messages: list[dict[str, str]], profile: EffortProfile, usage: Usage) -> AsyncIterator[str]:
         async with self._lock:
+            think = ThinkFilter()
             try:
                 async for piece in self._stream(messages, profile, usage):
-                    yield piece
+                    visible = think.feed(piece)
+                    if visible:
+                        yield visible
+                rest = think.flush()
+                if rest:
+                    yield rest
             except httpx.HTTPError as exc:
                 raise GenerationError(f"runtime request failed: {exc.__class__.__name__}") from exc
 
@@ -103,6 +166,7 @@ class OllamaGenerator(_HttpGenerator):
             "messages": messages,
             "stream": stream,
             "think": False,
+            "keep_alive": self.keep_alive,
             "options": {
                 "num_ctx": profile.context_tokens,
                 "num_predict": profile.max_answer_tokens,
@@ -159,6 +223,8 @@ class LlamaCppGenerator(_HttpGenerator):
             "max_tokens": profile.max_answer_tokens,
             "temperature": profile.temperature,
             "chat_template_kwargs": {"enable_thinking": False},
+            # Reuse the KV cache of the shared prompt prefix (system prompt, context) between requests.
+            "cache_prompt": True,
         }
         if stream:
             body["stream_options"] = {"include_usage": True}
