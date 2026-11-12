@@ -86,6 +86,9 @@ def put_ws_settings(
 ) -> dict:
     settings = request.app.state.settings
     ws_settings.put_setting(session, workspace_id, enabled=body.enabled, effort=body.effort, user_id=body.user_id)
+    jobs = getattr(request.app.state, "jobs", None)
+    if not body.enabled and jobs is not None:
+        jobs.cancel_workspace(workspace_id)
     return {
         "enabled": body.enabled,
         "effort": body.effort.value,

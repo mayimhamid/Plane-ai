@@ -32,6 +32,7 @@ The model runs on the CPU. On a machine that also runs other products, keep it f
 | `PLANE_AI_LLM_MEMORY` | 6g | hard memory cap of the runtime (the 2B Q4 model needs ~1.5 GB plus the context) |
 | `PLANE_AI_LLM_CONTEXT_LENGTH` | 8192 | the largest context; Low effort uses 2048 of it |
 | `PLANE_AI_KV_CACHE_TYPE` | q8_0 | 8-bit attention cache: about half the memory per token of context |
+| `PLANE_AI_LLM_IDLE_SECONDS` | 300 | idle this long, the runtime unloads the model and frees its memory (llama.cpp sleeps, Ollama unloads); the next request loads it again. `-1` keeps it loaded. A workspace turning AI Off also stops its running jobs |
 | `PLANE_AI_LLM_MAX_CONCURRENCY` | 1 | one answer at a time; others queue (two at once are both slower on a CPU) |
 
 In Plane, Effort Low uses 1-2 threads and short answers: slower per answer, least load for the other products.

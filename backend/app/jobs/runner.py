@@ -29,13 +29,34 @@ class JobRunner:
         self.settings = settings
         self.session_factory = session_factory
         self.generator = generator
-        self._tasks: set[asyncio.Task] = set()
+        self._tasks: dict[str, asyncio.Task] = {}
+        self._stopped: set[str] = set()  # jobs cancelled on purpose (AI turned off), not by a shutdown
 
     def submit(self, job_id: str) -> asyncio.Task:
         task = asyncio.create_task(self._run(job_id), name=f"ai-job-{job_id}")
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        self._tasks[job_id] = task
+        task.add_done_callback(lambda _: (self._tasks.pop(job_id, None), self._stopped.discard(job_id)))
         return task
+
+    def cancel_workspace(self, workspace_id: str) -> int:
+        """AI was turned off: stop the workspace's queued and running jobs now, so the model goes idle (and
+        sleeps) instead of finishing work nobody may see. They end as failed with ``ai_disabled``."""
+        with self.session_factory() as session:
+            ids = list(
+                session.scalars(
+                    select(Job.id).where(Job.workspace_id == workspace_id, Job.status.in_(("queued", "running")))
+                )
+            )
+            for job in session.scalars(select(Job).where(Job.id.in_(ids))):
+                job.status, job.error, job.progress = "failed", "ai_disabled", ""
+                job.finished_at = datetime.now(timezone.utc)
+            session.commit()
+        for job_id in ids:
+            task = self._tasks.get(job_id)
+            if task is not None:
+                self._stopped.add(job_id)
+                task.cancel()
+        return len(ids)
 
     def resume(self) -> int:
         """Start again the jobs a restart interrupted, and drop very old ones."""
@@ -51,8 +72,8 @@ class JobRunner:
     async def drain(self, timeout: float = 5.0) -> None:
         """Wait a moment for running jobs at shutdown; the rest resume at the next start."""
         if self._tasks:
-            await asyncio.wait(list(self._tasks), timeout=timeout)
-        for task in list(self._tasks):
+            await asyncio.wait(list(self._tasks.values()), timeout=timeout)
+        for task in list(self._tasks.values()):
             task.cancel()
 
     async def _run(self, job_id: str) -> None:
@@ -89,8 +110,12 @@ class JobRunner:
                 session.add(Trace(job_id=job.id, position=position, messages=call["messages"], output=call["output"]))
             session.commit()
         except asyncio.CancelledError:
-            # Shutdown: leave it queued so it runs again at the next start.
             session.rollback()
+            if job_id in self._stopped:
+                # Turned off on purpose: cancel_workspace already marked it failed. The aborted HTTP request
+                # makes the runtime stop generating.
+                return
+            # Shutdown: leave it queued so it runs again at the next start.
             raise
         finally:
             current_trace.reset(token)

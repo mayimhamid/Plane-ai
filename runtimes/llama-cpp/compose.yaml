@@ -9,6 +9,9 @@ services:
     image: ${PLANE_AI_LLAMA_CPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
     restart: unless-stopped
     init: true
+    # Idle for this long: the server unloads the model and frees its memory (health checks do not wake it);
+    # the next request loads it again from the page cache. -1 keeps it loaded.
+    command: ["--sleep-idle-seconds", "${PLANE_AI_LLM_IDLE_SECONDS:-300}"]
     environment:
       # llama-server reads LLAMA_ARG_* variables as CLI flags.
       LLAMA_ARG_MODEL: /models/${PLANE_AI_LLM_MODEL_FILE:-Qwen3.5-2B-Q4_K_M.gguf}

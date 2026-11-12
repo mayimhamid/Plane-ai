@@ -210,3 +210,30 @@ def test_ask_puts_the_named_person_first_and_gives_them_room():
     assert job["result"]["sections"][0] == "person"
     prompt = gen.calls[-1]["messages"][0]["content"]
     assert prompt.count("OPS-4 nginx") > 10  # most of the person's rows fit in a small context
+
+
+class SlowGenerator(FakeGenerator):
+    """Takes a long time per answer, like a busy CPU."""
+
+    async def complete(self, messages, profile, json_schema=None):
+        import asyncio
+
+        await asyncio.sleep(30)
+        return await super().complete(messages, profile, json_schema)
+
+
+def test_turning_ai_off_stops_running_jobs():
+    client, _ = make_client(SlowGenerator())
+    with client:
+        job_id = start(client, "summarize", {"text": "long text"})
+        time.sleep(0.1)
+        off = client.put(
+            "/v1/workspaces/w/settings", headers=AUTH, json={"enabled": False, "effort": "low", "user_id": "u1"}
+        )
+        assert off.status_code == 200
+        job = wait(client, job_id)
+        assert job["status"] == "failed" and job["error"] == "ai_disabled"
+        # and no new work is accepted while it is off
+        body = {"workspace_id": "w", "user_id": "u1", "kind": "summarize", "input": {"text": "x"}}
+        refused = client.post("/v1/jobs", headers=AUTH, json=body)
+        assert refused.status_code == 409

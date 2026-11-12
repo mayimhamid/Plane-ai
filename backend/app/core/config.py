@@ -97,8 +97,9 @@ class Settings(BaseSettings):
     llm_request_timeout_seconds: float = Field(default=120.0, gt=0)
     # CPU threads the runtime may use at the highest effort (Ollama takes it per request).
     llm_max_threads: int = Field(default=4, ge=1, le=256)
-    # Ollama: how long the model stays in memory after a request (no reload on the next question).
-    llm_keep_alive: str = "24h"
+    # Ollama: how long the model stays in memory after the last request; then it is unloaded and the memory
+    # is free (docker compose sets it from PLANE_AI_LLM_IDLE_SECONDS, like llama.cpp's sleep).
+    llm_keep_alive: str = "300s"
     # Generations run one at a time by default: on a small machine two in parallel are both slower.
     llm_max_concurrency: int = Field(default=1, ge=1, le=16)
 

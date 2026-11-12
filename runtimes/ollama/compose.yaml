@@ -11,7 +11,7 @@ services:
     entrypoint: ["/bin/sh", "/opt/plane-ai/entrypoint.sh"]
     environment:
       OLLAMA_HOST: 0.0.0.0:11434
-      OLLAMA_KEEP_ALIVE: ${PLANE_AI_OLLAMA_KEEP_ALIVE:-24h}
+      OLLAMA_KEEP_ALIVE: ${PLANE_AI_LLM_IDLE_SECONDS:-300}s
       OLLAMA_NUM_PARALLEL: "1"
       OLLAMA_MAX_LOADED_MODELS: "1"
       # Flash attention + an 8-bit KV cache: about half the attention memory, same answers in practice.
