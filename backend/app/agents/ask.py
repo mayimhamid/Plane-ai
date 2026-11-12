@@ -26,20 +26,47 @@ logger = logging.getLogger(__name__)
 
 # The experts: what each section is good for (used by both routers) and how to read it.
 EXPERTS: dict[str, tuple[str, str]] = {
+    "person": (
+        "everything about the people named in the question: hours, tasks, quality, notes, evidence, rows",
+        "Answer about these people from their own data first.",
+    ),
     "people": (
-        "hours reported per person, days, reports sent, missing or late, overtime, tasks done, who worked how much",
+        "hours reported per person, days, reports sent, missing or late, overtime, who worked how much, most, least "
+        "ساعت کار کارکرد بیشترین کمترین گزارش چند ساعت چه کسی",
         "Read per-person totals; compare people only on the same measure.",
     ),
+    "quality": (
+        "quality of work, finished tasks, on time, late, deadline, reopened, rework, estimates, overrun, focus, "
+        "meetings, documents, comments, trend, compared with before, improving, worse, performance "
+        "کیفیت عملکرد تاخیر دیر به‌موقع تحویل برگشت دوباره باز تخمین برآورد جلسه مستند کامنت روند بهتر بدتر",
+        "Quality notes show where to look; a late or reopened task can have a good reason. Say which numbers "
+        "support each point.",
+    ),
     "daily_notes": (
-        "what each person wrote in their Day Reports: tasks, minutes, notes, what they did on a day, research, config",
+        "what each person wrote in their Day Reports: tasks, minutes, notes, what they did on a day, research, config "
+        "یادداشت گزارش روزانه چه کار کرد تحقیق کانفیگ تنظیم توضیح امروز دیروز",
         "Quote what people wrote when it matters; judge time against the work described.",
     ),
     "evidence": (
-        "whether reported work has traces: activity, documents, tasks marked done but still open, real work, fake",
+        "whether reported work has traces: activity, documents, tasks marked done but still open, real work, fake "
+        "واقعا کار کرده شواهد ردپا ثبت فعالیت الکی دروغ واقعی",
         "Low evidence is a reason to ask, not proof.",
     ),
-    "risks": ("open tasks at risk: overdue, blocked, stalled, unassigned, due soon, deadline", "Name the task keys."),
-    "workload": ("open tasks per person, planned time left against capacity, overloaded, free, busy", ""),
+    "projects": (
+        "time per project per person, where the time went, which project, split "
+        "پروژه زمان روی کدام پروژه تقسیم",
+        "",
+    ),
+    "risks": (
+        "open tasks at risk: overdue, blocked, stalled, unassigned, due soon, deadline "
+        "ریسک عقب افتاده مسدود گیر متوقف بدون مسئول",
+        "Name the task keys.",
+    ),
+    "workload": (
+        "open tasks per person, planned time left against capacity, overloaded, free, busy "
+        "حجم کار سرش شلوغ آزاد بار ظرفیت",
+        "",
+    ),
     "docs": ("work item descriptions and documents matching the question, how something works, specs", "Cite titles."),
 }
 
@@ -86,12 +113,15 @@ def lexical_route(question: str, available: list[str], limit: int = 3) -> list[s
     ranked = [name for name, score in sorted(zip(available, scores), key=lambda p: -p[1]) if score > 0]
     # Nothing matched: the per-person totals answer most general questions.
     if not ranked:
-        ranked = [name for name in ("people", "daily_notes", "evidence") if name in available]
+        ranked = [name for name in ("people", "quality", "daily_notes") if name in available]
     return ranked[:limit]
 
 
 async def route(generator: Generator, profile: EffortProfile, question: str, available: list[str], usage: Usage) -> tuple[list[str], str]:
     lexical = lexical_route(question, available)
+    # A question about named people: their own data always comes first (it is the most precise context).
+    if "person" in available:
+        lexical = ["person", *[name for name in lexical if name != "person"]][:3]
     if profile.effort is Effort.LOW:
         return lexical, "lexical"
     described = "; ".join(f"{name} = {EXPERTS.get(name, ('', ''))[0]}" for name in available)
@@ -103,17 +133,22 @@ async def route(generator: Generator, profile: EffortProfile, question: str, ava
     except GenerationError:
         picked = []
     # The model's picks first, then the lexical ones, at most three.
-    merged = list(dict.fromkeys(picked + lexical))[:3]
+    merged = list(dict.fromkeys((["person"] if "person" in available else []) + picked + lexical))[:3]
     return merged, "model" if picked else "lexical"
 
 
 def build_data(sections: dict[str, Section], chosen: list[str], budget: int) -> str:
     parts = []
-    share = max(200, budget // max(1, len(chosen)))
+    # The person section is the question's subject: it gets most of the room.
+    shares = {name: max(200, budget // max(1, len(chosen))) for name in chosen}
+    if chosen and chosen[0] == "person" and len(chosen) > 1:
+        shares["person"] = budget * 3 // 5
+        rest = max(200, (budget - shares["person"]) // (len(chosen) - 1))
+        shares.update({name: rest for name in chosen[1:]})
     for name in chosen:
         section = sections[name]
         title = section.title or name
-        parts.append(f"## {title}\n{truncate_to_tokens(section.text.strip(), share)}")
+        parts.append(f"## {title}\n{truncate_to_tokens(section.text.strip(), shares[name])}")
     return "\n\n".join(parts)
 
 

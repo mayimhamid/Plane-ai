@@ -63,6 +63,9 @@ def test_number_verification_and_router():
     assert unsupported_numbers("Ali reported ۴۵ h", data, "") == ["45"]  # Persian digits
     assert lexical_route("who reported the most hours", ["people", "risks", "daily_notes"])[0] == "people"
     assert lexical_route("which tasks are overdue", ["people", "risks"])[0] == "risks"
+    # Persian questions find their section too
+    assert lexical_route("کی بیشتر از همه تاخیر داشته و کارش برگشت خورده؟", ["people", "quality", "risks"])[0] == "quality"
+    assert lexical_route("رضا روی کدام پروژه وقت گذاشته؟", ["people", "projects", "risks"])[0] == "projects"
 
 
 # ------------------------------------------------------------------ jobs
@@ -191,3 +194,19 @@ def test_feedback_becomes_training_data():
     assert example["messages"][0]["role"] == "system"
     assert example["messages"][-1] == {"role": "assistant", "content": '{"rows": [{"n": 1, "verdict": "plausible"}]}'}
     assert example["meta"]["corrected"] is True
+
+
+def test_ask_puts_the_named_person_first_and_gives_them_room():
+    rows = "- 2026-11-10 OPS-4 nginx: 480 min; recorded: nothing\n" * 40
+    sections = {
+        "people": {"title": "Hours", "text": "Reza: 40 h\nSara: 38 h"},
+        "quality": {"title": "Quality", "text": "Reza: 3 late"},
+        "person": {"title": "About Reza", "text": "# Reza\n" + rows},
+    }
+    client, gen = make_client(FakeGenerator(["Reza spent 480 min on nginx."]))
+    with client:
+        client.put("/v1/workspaces/w/settings", headers=AUTH, json={"enabled": True, "effort": "low"})
+        job = wait(client, start(client, "ask", {"question": "How did Reza work this week?", "sections": sections}))
+    assert job["result"]["sections"][0] == "person"
+    prompt = gen.calls[-1]["messages"][0]["content"]
+    assert prompt.count("OPS-4 nginx") > 10  # most of the person's rows fit in a small context
