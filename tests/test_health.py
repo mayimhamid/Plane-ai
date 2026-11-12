@@ -97,6 +97,6 @@ def test_shutdown_closes_database_and_runtime_client(db):
 
 
 def test_docs_disabled_in_production(db):
-    with make_client(db, app_env="production", db_password="x") as client:
+    with make_client(db, app_env="production", db_password="x", service_token="t") as client:
         assert client.get("/docs").status_code == 404
         assert client.get("/health").json()["environment"] == "production"

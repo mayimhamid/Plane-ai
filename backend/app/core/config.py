@@ -95,6 +95,21 @@ class Settings(BaseSettings):
     llm_model_file: str = "Qwen3.5-2B-Q4_K_M.gguf"  # shared GGUF, inside model_storage_path
     llm_context_length: int = Field(default=8192, ge=512, le=131072)
     llm_request_timeout_seconds: float = Field(default=120.0, gt=0)
+    # CPU threads the runtime may use at the highest effort (Ollama takes it per request).
+    llm_max_threads: int = Field(default=4, ge=1, le=256)
+    # Generations run one at a time by default: on a small machine two in parallel are both slower.
+    llm_max_concurrency: int = Field(default=1, ge=1, le=16)
+
+    # --- AI features ---
+    # Shared secret Plane sends as `Authorization: Bearer <token>`. Required in production.
+    service_token: SecretStr = SecretStr("")
+    # Effort for workspaces that never chose one: high | medium | low.
+    default_effort: str = "medium"
+    # Optional embedding model served by the runtime (e.g. "nomic-embed-text" on Ollama). Empty: search is
+    # lexical (BM25) only, which needs no extra model and no extra memory.
+    embed_model: str = ""
+    # Answers to identical requests are reused for this long (0 turns the cache off).
+    cache_ttl_seconds: int = Field(default=900, ge=0)
 
     # ------------------------------------------------------------------ validators
 
@@ -137,6 +152,8 @@ class Settings(BaseSettings):
             errors.append(
                 f"{ENV_PREFIX}DB_PASSWORD (or {ENV_PREFIX}DATABASE_URL) is required in production"
             )
+        if not self.service_token.get_secret_value():
+            errors.append(f"{ENV_PREFIX}SERVICE_TOKEN is required in production")
         if errors:
             raise ValueError("; ".join(errors))
 
@@ -164,6 +181,14 @@ class Settings(BaseSettings):
             raise ValueError("must be a bare file name inside the model storage path")
         return v
 
+    @field_validator("default_effort")
+    @classmethod
+    def _valid_effort(cls, v: str) -> str:
+        v = v.lower()
+        if v not in {"high", "medium", "low"}:
+            raise ValueError("must be high, medium or low")
+        return v
+
     @property
     def llm_model_path(self) -> Path:
         """Absolute path to the shared GGUF file."""
@@ -171,9 +196,10 @@ class Settings(BaseSettings):
 
     def safe_summary(self) -> dict[str, object]:
         """Settings snapshot that is safe to log (no secrets)."""
-        data = self.model_dump(exclude={"database_url", "db_password"})
+        data = self.model_dump(exclude={"database_url", "db_password", "service_token"})
         data["database_configured_via_url"] = self.database_url is not None
         data["db_password_set"] = bool(self.db_password.get_secret_value())
+        data["service_token_set"] = bool(self.service_token.get_secret_value())
         return data
 
 

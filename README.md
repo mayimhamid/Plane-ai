@@ -3,7 +3,8 @@
 A local AI Copilot for [Plane](https://plane.so) project management. All inference runs on your own
 hardware through a local LLM runtime (Ollama or llama.cpp). No data leaves the machine.
 
-> Status: infrastructure scaffolding. There's no application logic yet.
+Plane works fully without it: every AI feature in Plane is optional and switched off when this service
+isn't configured or isn't reachable.
 
 ## Layout
 
@@ -116,7 +117,56 @@ Then change `PLANE_AI_LLM_RUNTIME` in `.env` and start again:
 docker compose up -d
 ```
 
-### Development
+### AI API (`/v1`)
+
+Called only by Plane's backend, with `Authorization: Bearer $PLANE_AI_SERVICE_TOKEN`. Plane checks who may
+do what and passes the workspace, the user and the projects that user may read.
+
+| Endpoint | What it does |
+|----------|--------------|
+| `GET /v1/status` | Runtime state and the three effort profiles |
+| `GET/PUT /v1/workspaces/{id}/settings` | AI on/off and effort (`high`, `medium`, `low`) per workspace |
+| `POST /v1/summarize` | Summary of a work item, report or text. At `high` a reviewer agent checks the draft and the writer fixes it (one round) |
+| `POST /v1/tasks/propose` | Task proposals as JSON (schema-validated, one repair attempt). Plane shows them in its import preview; nothing is created until the person confirms |
+| `POST /v1/chat` | Chat as server-sent events (`meta`, `token`, `done`/`error`). History stored, older turns folded into a summary, answers grounded on workspace content |
+| `GET/DELETE /v1/conversations[/{id}]` | A person's own conversations |
+| `POST /v1/documents`, `/v1/documents/delete` | Index workspace content (chunked) for search and grounded answers |
+| `POST /v1/search` | Search in the projects the caller may read: BM25, plus embeddings when `EMBED_MODEL` is set. Works without the LLM |
+| `POST /v1/classify`, `/v1/sentiment`, `/v1/nli` | Zero-shot classification, sentiment and claim-vs-evidence inference |
+| `POST /v1/analyze/team` | Team analysis: a supervisor runs one worker per person over the evidence Plane computed, then summarises |
+| `GET /v1/prompts` | The prompt templates and their versions |
+
+Errors: `409 ai_disabled` (the workspace turned AI off), `503 llm_unavailable` (the runtime can't answer).
+
+### Effort
+
+| | high | medium | low |
+|---|---|---|---|
+| CPU threads (Ollama) | all (`LLM_THREADS`) | half | 1-2 |
+| Context | full | up to 4096 | up to 2048 |
+| Answer length | 1024 | 512 | 256 |
+| Reviewer pass on summaries | yes | no | no |
+| Team analysis | model for everyone + summary | model for everyone + summary | model only for unclear cases, rule-based summary |
+
+`low` uses the least CPU and memory, so each answer takes longer; `high` is fastest and best but uses the
+whole machine. llama.cpp fixes its threads at start-up, so there effort changes context, length and passes.
+
+What keeps it fast on a small machine: one generation at a time (no thrashing), thinking turned off,
+answers to identical requests cached, BM25 search instead of an embedding model by default, and no
+LangChain/LangGraph/PyTorch: the agent loops are a few dozen lines each (`app/agents/`).
+
+### Connecting Plane
+
+In Plane's `apps/api/.env`:
+
+```dotenv
+PLANE_AI_URL=http://host.docker.internal:8100   # or http://127.0.0.1:8100 when Plane runs on the host
+PLANE_AI_TOKEN=<same value as PLANE_AI_SERVICE_TOKEN>
+```
+
+Leave `PLANE_AI_URL` empty and Plane hides every AI feature.
+
+## Development
 
 Publishes the DB on `127.0.0.1:5433`, the runtime on `127.0.0.1:11434` or `:8080`, and sets
 `APP_ENV=development`:
@@ -174,6 +224,55 @@ See [docs/infrastructure-verification.md](docs/infrastructure-verification.md).
 | `GET /health` | Liveness: the process is up. Doesn't check dependencies. |
 | `GET /ready` | Readiness: the database is reachable and the selected runtime serves the model (`ok`, `unavailable`, `loading`, `model_missing`). Returns `503` if not. |
 | `GET /docs` | OpenAPI UI (disabled in production) |
+
+## AI API (`/v1`)
+
+Called only by Plane's backend, with `Authorization: Bearer $PLANE_AI_SERVICE_TOKEN`. Plane checks who may
+do what and passes the workspace, the user and the projects that user may read.
+
+| Endpoint | What it does |
+|----------|--------------|
+| `GET /v1/status` | Runtime state and the three effort profiles |
+| `GET/PUT /v1/workspaces/{id}/settings` | AI on/off and effort (`high`, `medium`, `low`) per workspace |
+| `POST /v1/summarize` | Summary of a work item, report or text. At `high` a reviewer agent checks the draft and the writer fixes it (one round) |
+| `POST /v1/tasks/propose` | Task proposals as JSON (schema-validated, one repair attempt). Plane shows them in its import preview; nothing is created until the person confirms |
+| `POST /v1/chat` | Chat as server-sent events (`meta`, `token`, `done`/`error`). History stored, older turns folded into a summary, answers grounded on workspace content |
+| `GET/DELETE /v1/conversations[/{id}]` | A person's own conversations |
+| `POST /v1/documents`, `/v1/documents/delete` | Index workspace content (chunked) for search and grounded answers |
+| `POST /v1/search` | Search in the projects the caller may read: BM25, plus embeddings when `EMBED_MODEL` is set. Works without the LLM |
+| `POST /v1/classify`, `/v1/sentiment`, `/v1/nli` | Zero-shot classification, sentiment and claim-vs-evidence inference |
+| `POST /v1/analyze/team` | Team analysis: a supervisor runs one worker per person over the evidence Plane computed, then summarises |
+| `GET /v1/prompts` | The prompt templates and their versions |
+
+Errors: `409 ai_disabled` (the workspace turned AI off), `503 llm_unavailable` (the runtime can't answer).
+
+### Effort
+
+| | high | medium | low |
+|---|---|---|---|
+| CPU threads (Ollama) | all (`LLM_THREADS`) | half | 1-2 |
+| Context | full | up to 4096 | up to 2048 |
+| Answer length | 1024 | 512 | 256 |
+| Reviewer pass on summaries | yes | no | no |
+| Team analysis | model for everyone + summary | model for everyone + summary | model only for unclear cases, rule-based summary |
+
+`low` uses the least CPU and memory, so each answer takes longer; `high` is fastest and best but uses the
+whole machine. llama.cpp fixes its threads at start-up, so there effort changes context, length and passes.
+
+What keeps it fast on a small machine: one generation at a time (no thrashing), thinking turned off,
+answers to identical requests cached, BM25 search instead of an embedding model by default, and no
+LangChain/LangGraph/PyTorch: the agent loops are a few dozen lines each (`app/agents/`).
+
+### Connecting Plane
+
+In Plane's `apps/api/.env`:
+
+```dotenv
+PLANE_AI_URL=http://host.docker.internal:8100   # or http://127.0.0.1:8100 when Plane runs on the host
+PLANE_AI_TOKEN=<same value as PLANE_AI_SERVICE_TOKEN>
+```
+
+Leave `PLANE_AI_URL` empty and Plane hides every AI feature.
 
 ## Development
 

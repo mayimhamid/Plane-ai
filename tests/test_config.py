@@ -38,11 +38,11 @@ def test_production_requires_db_password():
 
 def test_production_rejects_debug():
     with pytest.raises(ValidationError, match="DEBUG"):
-        make(app_env="production", debug=True, db_password="x")
+        make(app_env="production", debug=True, db_password="x", service_token="t")
 
 
 def test_production_valid():
-    s = make(app_env="production", db_password="s3cr3t")
+    s = make(app_env="production", db_password="s3cr3t", service_token="t")
     assert s.debug is False
     assert s.log_level == "INFO"
 

@@ -81,7 +81,7 @@ else
 fi
 
 step "Compose configuration"
-if [ -f .env ]; then pass ".env exists"; else fail ".env exists" "cp .env.example .env and set PLANE_AI_DB_PASSWORD"; fi
+if [ -f .env ]; then pass ".env exists"; else fail ".env exists" "cp .env.example .env and set PLANE_AI_DB_PASSWORD and PLANE_AI_SERVICE_TOKEN"; fi
 for rt in ollama llama-cpp; do
     services="$(COMPOSE_PROFILES=$rt PLANE_AI_LLM_RUNTIME=$rt docker compose config --services 2>&1 | sort | tr '\n' ' ')"
     expected="$(printf '%s\n' plane-ai-api plane-ai-db plane-ai-model-init "plane-ai-$rt" | sort | tr '\n' ' ')"
